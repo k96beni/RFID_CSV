@@ -18,14 +18,29 @@ def load_custom_css():
             background-color: #F8F9FA;
         }}
         
-        /* Sidebar */
+        /* Sidebar - ljus design */
         [data-testid="stSidebar"] {{
-            background-color: {CHARGENODE_DARK};
+            background-color: #FFFFFF;
+            border-right: 1px solid {CHARGENODE_LIGHT};
         }}
         
-        [data-testid="stSidebar"] .css-1d391kg, 
-        [data-testid="stSidebar"] .css-pkbazv {{
-            color: white;
+        [data-testid="stSidebar"] > div:first-child {{
+            background-color: #FFFFFF;
+        }}
+        
+        /* Sidebar text - mörk färg för läsbarhet */
+        [data-testid="stSidebar"] * {{
+            color: {CHARGENODE_DARK} !important;
+        }}
+        
+        /* Sidebar radio buttons */
+        [data-testid="stSidebar"] .st-emotion-cache-1gulkj5 {{
+            color: {CHARGENODE_DARK};
+        }}
+        
+        /* Sidebar selected item */
+        [data-testid="stSidebar"] [data-baseweb="radio"] [data-checked="true"] {{
+            background-color: {CHARGENODE_GREEN} !important;
         }}
         
         /* Knappar */
@@ -44,9 +59,19 @@ def load_custom_css():
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }}
         
+        /* Primary button */
+        .stButton > button[kind="primary"] {{
+            background-color: {CHARGENODE_GREEN};
+        }}
+        
         /* Headers */
         h1, h2, h3 {{
             color: {CHARGENODE_DARK};
+        }}
+        
+        h1 {{
+            border-bottom: 3px solid {CHARGENODE_GREEN};
+            padding-bottom: 0.5rem;
         }}
         
         /* Info boxes */
@@ -93,6 +118,17 @@ def load_custom_css():
             padding: 1rem;
             border-radius: 5px;
             margin: 1rem 0;
+        }}
+        
+        /* Expander */
+        .streamlit-expanderHeader {{
+            background-color: #F8F9FA;
+            border-radius: 5px;
+        }}
+        
+        /* Metrics */
+        [data-testid="stMetricValue"] {{
+            color: {CHARGENODE_GREEN};
         }}
     </style>
     """, unsafe_allow_html=True)
@@ -226,9 +262,13 @@ def main():
     load_custom_css()
     
     # Sidebar navigation
-    st.sidebar.image("https://via.placeholder.com/200x60/2D3436/00B894?text=ChargeNode", 
-                     use_container_width=True)
-    st.sidebar.markdown("---")
+    st.sidebar.markdown(f"""
+        <div style='padding: 1rem 0; text-align: center; border-bottom: 2px solid {CHARGENODE_GREEN};'>
+            <h2 style='color: {CHARGENODE_GREEN}; margin: 0;'>ChargeNode</h2>
+            <p style='color: {CHARGENODE_DARK}; margin: 0; font-size: 0.9rem;'>RFID CSV Konverterare</p>
+        </div>
+    """, unsafe_allow_html=True)
+    st.sidebar.markdown("")
     
     # Session state initiering
     if 'step' not in st.session_state:
@@ -242,17 +282,19 @@ def main():
     
     # Navigation
     menu_options = {
-        'Instruktioner': 'instructions',
-        'Ladda upp fil': 'upload',
-        'Kolumnmappning': 'mapping',
-        'Validering': 'validation',
-        'Resultat': 'result'
+        '📋 Instruktioner': 'instructions',
+        '📤 Ladda upp fil': 'upload',
+        '🗺️ Kolumnmappning': 'mapping',
+        '✅ Validering': 'validation',
+        '📥 Resultat': 'result'
     }
     
+    st.sidebar.markdown("### Navigation")
     selected = st.sidebar.radio(
-        "Navigation",
+        "Välj steg:",
         list(menu_options.keys()),
-        index=list(menu_options.values()).index(st.session_state.step)
+        index=list(menu_options.values()).index(st.session_state.step),
+        label_visibility="collapsed"
     )
     st.session_state.step = menu_options[selected]
     
