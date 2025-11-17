@@ -116,6 +116,13 @@ def sanitize_filename(filename: str) -> str:
     
     return filename
 
+def is_tagg_id(value: str) -> bool:
+    """Kontrollera om värdet är ett TAGG ID (SE-MER format)."""
+    if pd.isna(value):
+        return False
+    value_str = str(value).strip()
+    return value_str.startswith('SE-MER-') or value_str.startswith('se-mer-')
+
 def validate_hex(hex_str: str) -> Tuple[bool, str]:
     """
     Validera HEX-format.
@@ -126,6 +133,10 @@ def validate_hex(hex_str: str) -> Tuple[bool, str]:
     
     # Konvertera till string och rensa
     hex_str = str(hex_str).strip().upper()
+    
+    # Kolla om det är ett TAGG ID istället - då är det inte ett giltigt HEX
+    if is_tagg_id(hex_str):
+        return False, hex_str
     
     # Ta bort eventuella prefix
     hex_str = hex_str.replace('0X', '').replace('0x', '')
@@ -306,6 +317,50 @@ def upload_step():
     else:
         st.info("👆 Vänligen ladda upp en Excel-fil för att fortsätta")
 
+def auto_detect_columns(df: pd.DataFrame) -> Dict[str, str]:
+    """Försök automatiskt detektera vilka kolumner som innehåller vad."""
+    detected = {
+        'rfid': None,
+        'tagg_id': None,
+        'identifier': None,
+        'company': None
+    }
+    
+    # Trimma kolumnnamn (ta bort mellanslag i början/slut)
+    df.columns = df.columns.str.strip()
+    
+    for col in df.columns:
+        col_lower = col.lower()
+        
+        # Kolla första värdet som inte är NaN
+        sample_values = df[col].dropna().head(5)
+        
+        if len(sample_values) > 0:
+            first_val = str(sample_values.iloc[0])
+            
+            # Detektera TAGG ID
+            if is_tagg_id(first_val):
+                if 'rfid' in col_lower or 'tagg' in col_lower or 'visible' in col_lower:
+                    detected['tagg_id'] = col
+                    continue
+            
+            # Detektera HEX
+            is_hex, _ = validate_hex(first_val)
+            if is_hex and ('hex' in col_lower or 'rfid' in col_lower or 'card' in col_lower):
+                detected['rfid'] = col
+                continue
+        
+        # Detektera identifieringsnummer
+        if any(keyword in col_lower for keyword in ['reg', 'licens', 'plate', 'referens', 'identifiering']):
+            detected['identifier'] = col
+        
+        # Detektera företagsnamn
+        if any(keyword in col_lower for keyword in ['företag', 'company', 'customer', 'name', 'namn', 'anläggning']):
+            if detected['company'] is None:  # Ta första matchningen
+                detected['company'] = col
+    
+    return detected
+
 def mapping_step():
     st.title("🗺️ Kolumnmappning")
     
@@ -314,11 +369,33 @@ def mapping_step():
         return
     
     df = st.session_state.df_main
+    # Trimma kolumnnamn
+    df.columns = df.columns.str.strip()
+    st.session_state.df_main = df
+    
     columns = [''] + list(df.columns)
+    
+    # Auto-detektera kolumner
+    if 'auto_detected' not in st.session_state:
+        st.session_state.auto_detected = auto_detect_columns(df)
+    
+    detected = st.session_state.auto_detected
     
     st.markdown("""
     Ange vilka kolumner som innehåller respektive data.
     """)
+    
+    # Visa auto-detekterade kolumner om några hittades
+    if any(detected.values()):
+        with st.expander("🤖 Auto-detekterade kolumner (klicka för att se)", expanded=False):
+            if detected['rfid']:
+                st.success(f"✅ HEX-nummer: **{detected['rfid']}**")
+            if detected['tagg_id']:
+                st.success(f"✅ TAGG ID: **{detected['tagg_id']}**")
+            if detected['identifier']:
+                st.success(f"✅ Identifieringsnummer: **{detected['identifier']}**")
+            if detected['company']:
+                st.info(f"ℹ️ Företagsnamn: **{detected['company']}**")
     
     col1, col2 = st.columns(2)
     
@@ -326,47 +403,96 @@ def mapping_step():
         st.markdown("#### Obligatoriska fält")
         
         # RFID eller TAGG ID (måste välja ett)
+        # Försök auto-detektera vad filen innehåller
+        default_match_type = 0  # RFID/HEX
+        if detected['tagg_id'] and not detected['rfid']:
+            default_match_type = 1  # TAGG ID
+        
         match_type = st.radio(
             "Matchning sker på:",
             ["RFID/HEX-nummer", "TAGG ID"],
+            index=default_match_type,
             help="Välj om din fil innehåller RFID-nummer direkt eller TAGG ID som behöver konverteras"
         )
         
         if match_type == "RFID/HEX-nummer":
+            default_idx = 0
+            if detected['rfid'] and detected['rfid'] in columns:
+                default_idx = columns.index(detected['rfid'])
+            
             rfid_col = st.selectbox(
                 "RFID/HEX-nummer kolumn *",
                 columns,
-                help="Ex: AAC02A7B"
+                index=default_idx,
+                help="Ex: AAC02A7B (8 tecken hexadecimalt)"
             )
             st.session_state.column_mapping['rfid'] = rfid_col if rfid_col != '' else None
             st.session_state.column_mapping['tagg_id'] = None
+            
+            # Visa preview
+            if rfid_col and rfid_col != '':
+                sample = df[rfid_col].dropna().head(3)
+                if len(sample) > 0:
+                    st.caption(f"Exempel värden: {', '.join([str(x) for x in sample])}")
         else:
+            default_idx = 0
+            if detected['tagg_id'] and detected['tagg_id'] in columns:
+                default_idx = columns.index(detected['tagg_id'])
+            
             tagg_col = st.selectbox(
                 "TAGG ID kolumn *",
                 columns,
+                index=default_idx,
                 help="Ex: SE-MER-C30020428-F"
             )
             st.session_state.column_mapping['tagg_id'] = tagg_col if tagg_col != '' else None
             st.session_state.column_mapping['rfid'] = None
+            
+            # Visa preview
+            if tagg_col and tagg_col != '':
+                sample = df[tagg_col].dropna().head(3)
+                if len(sample) > 0:
+                    st.caption(f"Exempel värden: {', '.join([str(x) for x in sample])}")
+        
+        default_idx = 0
+        if detected['identifier'] and detected['identifier'] in columns:
+            default_idx = columns.index(detected['identifier'])
         
         identifier_col = st.selectbox(
             "Regnummer/Referens (Identifieringsnummer) *",
             columns,
+            index=default_idx,
             help="Detta blir 'Identifieringsnummer' i CSV-filen"
         )
         st.session_state.column_mapping['identifier'] = identifier_col if identifier_col != '' else None
+        
+        # Visa preview
+        if identifier_col and identifier_col != '':
+            sample = df[identifier_col].dropna().head(3)
+            if len(sample) > 0:
+                st.caption(f"Exempel värden: {', '.join([str(x) for x in sample])}")
     
     with col2:
         st.markdown("#### Valfria fält")
         
+        default_idx = 0
+        if detected['company'] and detected['company'] in columns:
+            default_idx = columns.index(detected['company'])
+        
         company_col = st.selectbox(
             "Företagsnamn",
             columns,
+            index=default_idx,
             help="Om flera företag finns skapas separata filer"
         )
         st.session_state.column_mapping['company'] = company_col if company_col != '' else None
         
-        if company_col == '':
+        if company_col and company_col != '':
+            # Visa preview
+            sample = df[company_col].dropna().head(3)
+            if len(sample) > 0:
+                st.caption(f"Exempel värden: {', '.join([str(x) for x in sample])}")
+        else:
             st.info("💡 Om företagsnamn saknas skapas en gemensam fil")
     
     # Validera mappning
@@ -423,19 +549,27 @@ def mapping_step():
                 try:
                     df_mer = pd.read_excel(mer_file)
                     
+                    # Trimma kolumnnamn
+                    df_mer.columns = df_mer.columns.str.strip()
+                    
                     # Kontrollera att rätt kolumner finns
                     required_cols = ['Visible Number', 'Key/Card number']
                     missing_cols = [col for col in required_cols if col not in df_mer.columns]
                     
                     if missing_cols:
                         st.error(f"❌ Följande kolumner saknas i MER-filen: {', '.join(missing_cols)}")
+                        st.info("📋 Tillgängliga kolumner i filen: " + ", ".join(df_mer.columns))
                     else:
                         st.session_state.df_mer = df_mer
                         st.success("✅ MER-fil uppladdad")
                         
+                        # Visa statistik
+                        st.info(f"📊 MER-filen innehåller {len(df_mer)} TAGG ID → RFID mappningar")
+                        
                         # Visa förhandsgranskning
                         with st.expander("👀 Förhandsgranska MER-fil"):
-                            st.dataframe(df_mer.head(10), use_container_width=True)
+                            preview_mer = df_mer[['Visible Number', 'Key/Card number']].head(10)
+                            st.dataframe(preview_mer, use_container_width=True)
                         
                         if st.button("➡️ Fortsätt till Validering", type="primary"):
                             st.session_state.step = 'validation'
@@ -483,17 +617,26 @@ def validation_step():
                 st.error("❌ MER-fil saknas men krävs för TAGG ID matchning")
                 return
             
-            df_mer = st.session_state.df_mer
+            df_mer = st.session_state.df_mer.copy()
             
-            # Skapa mapping dictionary
-            mer_mapping = dict(zip(df_mer['Visible Number'], df_mer['Key/Card number']))
+            # Trimma kolumnnamn i MER-fil
+            df_mer.columns = df_mer.columns.str.strip()
             
-            # Matcha TAGG ID
-            df['RFID_RAW'] = df[mapping['tagg_id']].map(mer_mapping)
+            # Skapa mapping dictionary (normalisera TAGG ID till uppercase för matchning)
+            mer_mapping = {}
+            for idx, row in df_mer.iterrows():
+                tagg = str(row['Visible Number']).strip().upper()
+                rfid = str(row['Key/Card number']).strip().upper()
+                mer_mapping[tagg] = rfid
+            
+            # Matcha TAGG ID (normalisera till uppercase)
+            df['TAGG_ID_NORMALIZED'] = df[mapping['tagg_id']].apply(lambda x: str(x).strip().upper() if pd.notna(x) else '')
+            df['RFID_RAW'] = df['TAGG_ID_NORMALIZED'].map(mer_mapping)
             
             # Hitta omatchade
             unmatched = df[df['RFID_RAW'].isna() & df[mapping['tagg_id']].notna()]
             if len(unmatched) > 0:
+                st.warning(f"⚠️ {len(unmatched)} TAGG ID saknar matchning i MER-filen")
                 for idx, row in unmatched.iterrows():
                     errors.append({
                         'Rad': idx + 2,  # +2 för Excel-radnummer (header + 0-index)
